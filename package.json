@@ -1,0 +1,37 @@
+{
+  "name": "movie-streaming-app",
+  "version": "1.0.0",
+  "description": "A movie streaming application built with React.",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "keywords": [
+    "react",
+    "movie",
+    "streaming",
+    "application"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "react-router-dom": "^6.0.0",
+    "axios": "^0.21.1"
+  },
+  "devDependencies": {
+    "react-scripts": "5.0.0"
+  },
+  "homepage": "/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/movie-streaming-app.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/movie-streaming-app/issues"
+  }
+}

@@ -1,0 +1,16 @@
+:root {
+  --bg-primary: #0f0f0f;
+  --bg-secondary: #141414;
+  --bg-card: #1c1c1c;
+  --bg-nav: rgba(10, 10, 10, 0.96);
+  --accent: #e50914;
+  --accent-hover: #c0070f;
+  --text-primary: #ffffff;
+  --text-secondary: #b3b3b3;
+  --text-muted: #6b6b6b;
+  --border: #2a2a2a;
+  --star-color: #f5c518;
+  --navbar-height: 68px;
+  --card-radius: 8px;
+  --transition: 0.2s ease;
+}
