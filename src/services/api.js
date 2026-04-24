@@ -11,6 +11,12 @@ export const fetchHomeContent = async () => {
   return response.data;
 };
 
+export const fetchCatalog = async (type, page = 1) => {
+  const endpoint = type === 'series' ? '/series' : '/movies';
+  const response = await apiClient.get(endpoint, { params: { page } });
+  return response.data;
+};
+
 // Function to fetch a list of movies
 export const fetchMovies = async () => {
   try {
@@ -29,6 +35,16 @@ export const fetchMovieDetails = async (movieId) => {
     return response.data;
   } catch (error) {
     console.error(`Error fetching details for movie ID ${movieId}:`, error);
+    throw error;
+  }
+};
+
+export const fetchContentVideos = async (contentId) => {
+  try {
+    const response = await apiClient.get(`/content/${contentId}/videos`);
+    return response.data;
+  } catch (error) {
+    console.error(`Error fetching videos for content ID ${contentId}:`, error);
     throw error;
   }
 };

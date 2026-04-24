@@ -16,7 +16,8 @@ if (!tmdbReadToken) {
 }
 
 const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
-app.use(cors({ origin: allowedOrigin }));
+const allowedOrigins = allowedOrigin === '*' ? '*' : allowedOrigin.split(',').map((origin) => origin.trim());
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
 
 const tmdbClient = axios.create({
@@ -115,6 +116,44 @@ function toDetailsItem(item, type) {
   };
 }
 
+function resolveContentId(contentId) {
+  const [type, tmdbId] = String(contentId || '').split('-');
+
+  if (!type || !tmdbId || !['movie', 'series', 'tv'].includes(type)) {
+    return null;
+  }
+
+  return {
+    tmdbType: type === 'movie' ? 'movie' : 'tv',
+    appType: type === 'movie' ? 'movie' : 'series',
+    tmdbId
+  };
+}
+
+function pickTrailerVideo(videos) {
+  const youtubeVideos = (videos || []).filter((video) => video.site === 'YouTube');
+
+  const trailer = youtubeVideos.find((video) => video.type === 'Trailer' && video.official) ||
+    youtubeVideos.find((video) => video.type === 'Trailer') ||
+    youtubeVideos.find((video) => video.type === 'Teaser') ||
+    youtubeVideos[0];
+
+  if (!trailer) {
+    return null;
+  }
+
+  return {
+    id: trailer.id,
+    key: trailer.key,
+    name: trailer.name,
+    site: trailer.site,
+    type: trailer.type,
+    official: Boolean(trailer.official),
+    publishedAt: trailer.published_at || null,
+    embedUrl: `https://www.youtube.com/embed/${trailer.key}?autoplay=1&rel=0`
+  };
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
@@ -156,22 +195,80 @@ app.get('/api/home', async (_req, res) => {
   }
 });
 
+app.get('/api/movies', async (req, res) => {
+  try {
+    const genres = await loadGenres();
+    const page = Number(req.query.page || 1);
+    const moviesResp = await tmdbClient.get('/movie/popular', { params: { page } });
+
+    const movies = (moviesResp.data.results || [])
+      .map((item) => toCardItem(item, 'movie', genres.movie))
+      .filter((item) => item.poster);
+
+    return res.json({
+      page: moviesResp.data.page,
+      totalPages: moviesResp.data.total_pages,
+      results: movies
+    });
+  } catch (error) {
+    console.error('Error loading movies catalog:', error.response?.data || error.message);
+    return res.status(500).json({ message: 'Failed to fetch movies catalog from TMDB.' });
+  }
+});
+
+app.get('/api/series', async (req, res) => {
+  try {
+    const genres = await loadGenres();
+    const page = Number(req.query.page || 1);
+    const tvResp = await tmdbClient.get('/tv/popular', { params: { page } });
+
+    const series = (tvResp.data.results || [])
+      .map((item) => toCardItem(item, 'series', genres.tv))
+      .filter((item) => item.poster);
+
+    return res.json({
+      page: tvResp.data.page,
+      totalPages: tvResp.data.total_pages,
+      results: series
+    });
+  } catch (error) {
+    console.error('Error loading tv catalog:', error.response?.data || error.message);
+    return res.status(500).json({ message: 'Failed to fetch TV series catalog from TMDB.' });
+  }
+});
+
 app.get('/api/content/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    const [type, tmdbId] = id.split('-');
+    const resolved = resolveContentId(req.params.id);
 
-    if (!type || !tmdbId || !['movie', 'series', 'tv'].includes(type)) {
+    if (!resolved) {
       return res.status(400).json({ message: 'Invalid content id format.' });
     }
 
-    const tmdbType = type === 'movie' ? 'movie' : 'tv';
-    const detailsResp = await tmdbClient.get(`/${tmdbType}/${tmdbId}`);
+    const detailsResp = await tmdbClient.get(`/${resolved.tmdbType}/${resolved.tmdbId}`);
 
-    return res.json(toDetailsItem(detailsResp.data, type === 'movie' ? 'movie' : 'series'));
+    return res.json(toDetailsItem(detailsResp.data, resolved.appType));
   } catch (error) {
     console.error('Error loading content details:', error.response?.data || error.message);
     return res.status(500).json({ message: 'Failed to fetch content details from TMDB.' });
+  }
+});
+
+app.get('/api/content/:id/videos', async (req, res) => {
+  try {
+    const resolved = resolveContentId(req.params.id);
+
+    if (!resolved) {
+      return res.status(400).json({ message: 'Invalid content id format.' });
+    }
+
+    const videosResp = await tmdbClient.get(`/${resolved.tmdbType}/${resolved.tmdbId}/videos`);
+    const trailer = pickTrailerVideo(videosResp.data.results || []);
+
+    return res.json({ trailer });
+  } catch (error) {
+    console.error('Error loading content videos:', error.response?.data || error.message);
+    return res.status(500).json({ message: 'Failed to fetch content videos from TMDB.' });
   }
 });
 

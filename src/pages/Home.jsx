@@ -22,9 +22,9 @@ const Home = () => {
   return (
     <div className="page-content">
       <HeroSection movie={trending[0]} />
-      <MovieRow title="Trending Movies" movies={trending} />
-      <MovieRow title="Movies" movies={movies} />
-      <MovieRow title="TV Series" movies={series} />
+      <MovieRow title="Trending Movies" movies={trending} viewAllPath="/movies" />
+      <MovieRow title="Movies" movies={movies} viewAllPath="/movies" />
+      <MovieRow title="TV Series" movies={series} viewAllPath="/tv-shows" />
     </div>
   );
 };

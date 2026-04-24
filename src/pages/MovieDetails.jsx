@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import VideoPlayer from '../components/VideoPlayer';
-import { fetchMovieDetails } from '../services/api';
+import { fetchMovieDetails, fetchContentVideos } from '../services/api';
 
 const MovieDetails = () => {
   const { id } = useParams();
   const [movie, setMovie] = useState(null);
+  const [trailer, setTrailer] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -15,13 +16,17 @@ const MovieDetails = () => {
     const loadMovieDetails = async () => {
       try {
         setLoading(true);
-        const data = await fetchMovieDetails(id);
+        const [details, videos] = await Promise.all([
+          fetchMovieDetails(id),
+          fetchContentVideos(id)
+        ]);
 
         if (!mounted) {
           return;
         }
 
-        setMovie(data);
+        setMovie(details);
+        setTrailer(videos?.trailer || null);
         setError(null);
       } catch (err) {
         if (!mounted) {
@@ -75,7 +80,7 @@ const MovieDetails = () => {
         </div>
         <p className="movie-details-overview">{movie.overview}</p>
         <Link to={`/watch/${id}`} className="btn-watch">▶ Watch Now</Link>
-        <VideoPlayer videoSrc={movie.videoSrc} />
+        <VideoPlayer youtubeKey={trailer?.key} videoSrc={movie.videoSrc} title={trailer?.name || movie.title} />
       </div>
     </div>
   );

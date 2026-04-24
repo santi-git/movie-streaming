@@ -413,6 +413,28 @@ a {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
   gap: 16px;
+  flex-wrap: wrap;
+}
+
+.catalog-page {
+  padding: 100px 40px 40px;
+}
+
+.catalog-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 24px;
+}
+
+.catalog-header h1 {
+  font-size: 1.8rem;
+  font-weight: 800;
+}
+
+.catalog-header p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
 }
 
 /* ─── FORMS ──────────────────────────────────────────── */
@@ -465,6 +487,39 @@ form button:hover, button[type="submit"]:hover { background: var(--accent-hover)
 }
 
 .video-player video { width: 100%; height: 100%; }
+.video-player iframe { width: 100%; height: 100%; }
+
+.video-player-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.watch-page {
+  padding: 100px 60px 60px;
+}
+
+.watch-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.watch-header h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.watch-note {
+  margin-top: 14px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
 
 /* ─── MOVIE DETAILS PAGE ─────────────────────────────── */
 .movie-details-page {

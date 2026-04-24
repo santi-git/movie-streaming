@@ -12,8 +12,3 @@ const MovieList = ({ movies = [] }) => {
 };
 
 export default MovieList;
-    </div>
-  );
-};
-
-export default MovieList;

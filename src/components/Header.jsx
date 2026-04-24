@@ -5,6 +5,11 @@ const Header = () => {
   const [scrolled, setScrolled] = useState(false);
   const [search, setSearch] = useState('');
   const location = useLocation();
+  const isHome = location.pathname === '/';
+  const isMovies = location.pathname.startsWith('/movies') ||
+    (location.pathname.startsWith('/movie/') && location.pathname.includes('movie-'));
+  const isTvShows = location.pathname.startsWith('/tv-shows') ||
+    (location.pathname.startsWith('/movie/') && location.pathname.includes('series-'));
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 50);
@@ -19,9 +24,9 @@ const Header = () => {
       </Link>
 
       <ul className="navbar-links">
-        <li><Link to="/" className={location.pathname === '/' ? 'active' : ''}>Home</Link></li>
-        <li><Link to="/movies" className={location.pathname === '/movies' ? 'active' : ''}>Movies</Link></li>
-        <li><Link to="/tv-shows" className={location.pathname === '/tv-shows' ? 'active' : ''}>TV Shows</Link></li>
+        <li><Link to="/" className={isHome ? 'active' : ''}>Home</Link></li>
+        <li><Link to="/movies" className={isMovies ? 'active' : ''}>Movies</Link></li>
+        <li><Link to="/tv-shows" className={isTvShows ? 'active' : ''}>TV Shows</Link></li>
       </ul>
 
       <div className="navbar-search">
