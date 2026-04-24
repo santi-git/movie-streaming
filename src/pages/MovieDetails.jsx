@@ -16,10 +16,15 @@ const MovieDetails = () => {
     const loadMovieDetails = async () => {
       try {
         setLoading(true);
-        const [details, videos] = await Promise.all([
-          fetchMovieDetails(id),
-          fetchContentVideos(id)
-        ]);
+        const details = await fetchMovieDetails(id);
+        let videos = null;
+
+        try {
+          videos = await fetchContentVideos(id);
+        } catch (_videoError) {
+          // Trailer is optional; keep details page usable even if videos endpoint is unavailable.
+          videos = { trailer: null };
+        }
 
         if (!mounted) {
           return;

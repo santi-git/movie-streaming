@@ -17,10 +17,15 @@ const Watch = () => {
       try {
         setLoading(true);
 
-        const [details, videos] = await Promise.all([
-          fetchMovieDetails(id),
-          fetchContentVideos(id)
-        ]);
+        const details = await fetchMovieDetails(id);
+        let videos = null;
+
+        try {
+          videos = await fetchContentVideos(id);
+        } catch (_videoError) {
+          // Keep watch page available even if trailer endpoint has not been deployed yet.
+          videos = { trailer: null };
+        }
 
         if (!mounted) {
           return;
