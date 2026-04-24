@@ -3,6 +3,10 @@
 ## Overview
 The Movie Streaming App is a web application that allows users to browse, search, and watch movies. It features user authentication, a responsive design, and a clean user interface.
 
+This project now includes:
+- A React frontend
+- A Node.js/Express backend that proxies TMDB APIs
+
 ## Features
 - User authentication (login and registration)
 - Movie browsing and searching
@@ -46,17 +50,46 @@ movie-streaming-app
    ```
    cd movie-streaming-app
    ```
-3. Install dependencies:
+3. Install frontend and backend dependencies:
    ```
-   npm install
+   npm run dev:install
    ```
 
 ## Usage
-1. Start the development server:
+1. Create backend environment file:
+   ```
+   cp backend/.env.example backend/.env
+   ```
+2. Edit `backend/.env` and set `TMDB_READ_TOKEN`.
+3. Start backend:
+   ```
+   npm run backend
+   ```
+4. In a new terminal, start frontend:
    ```
    npm start
    ```
-2. Open your browser and go to `http://localhost:3000` to view the application.
+5. Open your browser and go to `http://localhost:3000` to view the application.
+
+## Environment Variables
+
+### Frontend (.env)
+- `REACT_APP_API_BASE_URL` Example: `http://localhost:5001/api`
+
+### Backend (backend/.env)
+- `TMDB_READ_TOKEN` TMDB v4 Read Access Token
+- `PORT` Example: `5001`
+- `ALLOWED_ORIGIN` Example: `http://localhost:3000`
+
+## Deployment
+
+### Backend (Render)
+- Deploy the `backend` folder as a Node service.
+- Set env vars: `TMDB_READ_TOKEN`, `PORT`, `ALLOWED_ORIGIN`.
+
+### Frontend (Vercel)
+- Set env var: `REACT_APP_API_BASE_URL` to your backend URL with `/api`.
+- Redeploy after updating environment variables.
 
 ## Contributing
 Contributions are welcome! Please open an issue or submit a pull request for any enhancements or bug fixes.
