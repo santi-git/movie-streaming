@@ -2,39 +2,67 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const dotenv = require('dotenv');
-const mysql = require('mysql2/promise');
+const { Pool } = require('pg');
 
 dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT || 5001);
 const tmdbReadToken = process.env.TMDB_READ_TOKEN;
+const adminSyncToken = process.env.ADMIN_SYNC_TOKEN;
 
 if (!tmdbReadToken) {
   console.error('Missing TMDB_READ_TOKEN in backend environment variables.');
   process.exit(1);
 }
 
-const dbConfig = {
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT || 3306),
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  waitForConnections: true,
-  connectionLimit: 5,
-  queueLimit: 0
-};
+function buildDbConfig() {
+  const useSsl = String(process.env.DB_SSL || 'false').toLowerCase() === 'true';
+  const rejectUnauthorized = String(process.env.DB_SSL_REJECT_UNAUTHORIZED || 'true').toLowerCase() === 'true';
+  const poolLimit = Number(process.env.DB_POOL_LIMIT || 5);
+  const databaseUrl = String(process.env.DATABASE_URL || '').trim();
+
+  if (databaseUrl) {
+    const parsed = new URL(databaseUrl);
+
+    // DATABASE_URL query param sslmode=require should imply SSL on providers like Aiven.
+    const sslMode = parsed.searchParams.get('sslmode');
+    const enableSslFromUrl = sslMode === 'require' || sslMode === 'verify-ca' || sslMode === 'verify-full';
+
+    // Remove driver-specific SSL query params to prevent pg-connection-string from
+    // overriding the explicit ssl config we pass below.
+    parsed.searchParams.delete('sslmode');
+    parsed.searchParams.delete('ssl');
+    parsed.searchParams.delete('sslcert');
+    parsed.searchParams.delete('sslkey');
+    parsed.searchParams.delete('sslrootcert');
+
+    return {
+      connectionString: parsed.toString(),
+      max: poolLimit,
+      ssl: (useSsl || enableSslFromUrl) ? { rejectUnauthorized } : undefined
+    };
+  }
+
+  return {
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT || 5432),
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    max: poolLimit,
+    ssl: useSsl ? { rejectUnauthorized } : undefined
+  };
+}
+
+const dbConfig = buildDbConfig();
 
 const hasDbConfig = Boolean(
-  dbConfig.host &&
-  dbConfig.user &&
-  dbConfig.password &&
-  dbConfig.database
+  dbConfig.connectionString || (dbConfig.host && dbConfig.user && dbConfig.password && dbConfig.database)
 );
 
 if (!hasDbConfig) {
-  console.error('Missing DB configuration. Set DB_HOST, DB_USER, DB_PASSWORD, DB_NAME.');
+  console.error('Missing DB configuration. Set DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD/DB_NAME.');
   process.exit(1);
 }
 
@@ -196,18 +224,30 @@ function mapRowToDetails(row) {
 }
 
 async function initDbPool() {
-  dbPool = mysql.createPool(dbConfig);
-  const connection = await dbPool.getConnection();
-  connection.release();
+  dbPool = new Pool(dbConfig);
+
+  try {
+    await dbPool.query('SELECT 1');
+  } catch (error) {
+    if (error.code === 'ENOTFOUND') {
+      console.error('Database hostname could not be resolved. Check DB_HOST or DATABASE_URL.');
+    }
+
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      console.error('Database connection refused/timed out. Provider may block external connections or SSL may be required.');
+    }
+
+    throw error;
+  }
 }
 
 async function bootstrapSchema() {
-  await dbPool.execute(`
+  await dbPool.query(`
     CREATE TABLE IF NOT EXISTS contents (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      id BIGSERIAL PRIMARY KEY,
       content_key VARCHAR(64) NOT NULL,
-      tmdb_id BIGINT UNSIGNED NOT NULL,
-      type ENUM('movie', 'series') NOT NULL,
+      tmdb_id BIGINT NOT NULL,
+      type VARCHAR(16) NOT NULL CHECK (type IN ('movie', 'series')),
       title VARCHAR(255) NOT NULL,
       poster_url TEXT,
       backdrop_url TEXT,
@@ -218,44 +258,44 @@ async function bootstrapSchema() {
       genre VARCHAR(255) NULL,
       popularity DOUBLE DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uniq_content_key (content_key),
-      KEY idx_type_rating (type, rating),
-      KEY idx_title (title)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
-  await dbPool.execute(`
+  await dbPool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_content_key ON contents(content_key);');
+  await dbPool.query('CREATE INDEX IF NOT EXISTS idx_type_rating ON contents(type, rating);');
+  await dbPool.query('CREATE INDEX IF NOT EXISTS idx_title ON contents(title);');
+
+  await dbPool.query(`
     CREATE TABLE IF NOT EXISTS content_collections (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      id BIGSERIAL PRIMARY KEY,
       collection_name VARCHAR(32) NOT NULL,
       content_key VARCHAR(64) NOT NULL,
       sort_rank INT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uniq_collection_content (collection_name, content_key),
-      KEY idx_collection_rank (collection_name, sort_rank)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
-  await dbPool.execute(`
+  await dbPool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_collection_content ON content_collections(collection_name, content_key);');
+  await dbPool.query('CREATE INDEX IF NOT EXISTS idx_collection_rank ON content_collections(collection_name, sort_rank);');
+
+  await dbPool.query(`
     CREATE TABLE IF NOT EXISTS content_videos (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      id BIGSERIAL PRIMARY KEY,
       content_key VARCHAR(64) NOT NULL,
       video_key VARCHAR(64) NOT NULL,
       name VARCHAR(255) NOT NULL,
       site VARCHAR(32) NOT NULL,
       video_type VARCHAR(64) NOT NULL,
-      official TINYINT(1) DEFAULT 0,
-      published_at DATETIME NULL,
+      official BOOLEAN DEFAULT FALSE,
+      published_at TIMESTAMP NULL,
       embed_url TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uniq_content_video (content_key, video_key),
-      KEY idx_content_video (content_key)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
   `);
+
+  await dbPool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_content_video ON content_videos(content_key, video_key);');
+  await dbPool.query('CREATE INDEX IF NOT EXISTS idx_content_video ON content_videos(content_key);');
 }
 
 async function upsertContents(contents) {
@@ -267,24 +307,24 @@ async function upsertContents(contents) {
     INSERT INTO contents (
       content_key, tmdb_id, type, title, poster_url, backdrop_url,
       overview, rating, release_date, release_year, genre, popularity
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      tmdb_id = VALUES(tmdb_id),
-      type = VALUES(type),
-      title = VALUES(title),
-      poster_url = VALUES(poster_url),
-      backdrop_url = VALUES(backdrop_url),
-      overview = VALUES(overview),
-      rating = VALUES(rating),
-      release_date = VALUES(release_date),
-      release_year = VALUES(release_year),
-      genre = VALUES(genre),
-      popularity = VALUES(popularity),
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    ON CONFLICT (content_key) DO UPDATE SET
+      tmdb_id = EXCLUDED.tmdb_id,
+      type = EXCLUDED.type,
+      title = EXCLUDED.title,
+      poster_url = EXCLUDED.poster_url,
+      backdrop_url = EXCLUDED.backdrop_url,
+      overview = EXCLUDED.overview,
+      rating = EXCLUDED.rating,
+      release_date = EXCLUDED.release_date,
+      release_year = EXCLUDED.release_year,
+      genre = EXCLUDED.genre,
+      popularity = EXCLUDED.popularity,
       updated_at = CURRENT_TIMESTAMP;
   `;
 
   for (const content of contents) {
-    await dbPool.execute(sql, [
+    await dbPool.query(sql, [
       content.contentKey,
       content.tmdbId,
       content.type,
@@ -302,12 +342,12 @@ async function upsertContents(contents) {
 }
 
 async function replaceCollection(collectionName, contentKeys) {
-  await dbPool.execute('DELETE FROM content_collections WHERE collection_name = ?', [collectionName]);
+  await dbPool.query('DELETE FROM content_collections WHERE collection_name = $1', [collectionName]);
 
   let rank = 1;
   for (const contentKey of contentKeys) {
-    await dbPool.execute(
-      'INSERT INTO content_collections (collection_name, content_key, sort_rank) VALUES (?, ?, ?)',
+    await dbPool.query(
+      'INSERT INTO content_collections (collection_name, content_key, sort_rank) VALUES ($1, $2, $3)',
       [collectionName, contentKey, rank]
     );
     rank += 1;
@@ -319,18 +359,18 @@ async function upsertTrailer(contentKey, trailer) {
     return;
   }
 
-  await dbPool.execute(
+  await dbPool.query(
     `
     INSERT INTO content_videos (
       content_key, video_key, name, site, video_type, official, published_at, embed_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      name = VALUES(name),
-      site = VALUES(site),
-      video_type = VALUES(video_type),
-      official = VALUES(official),
-      published_at = VALUES(published_at),
-      embed_url = VALUES(embed_url);
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (content_key, video_key) DO UPDATE SET
+      name = EXCLUDED.name,
+      site = EXCLUDED.site,
+      video_type = EXCLUDED.video_type,
+      official = EXCLUDED.official,
+      published_at = EXCLUDED.published_at,
+      embed_url = EXCLUDED.embed_url;
     `,
     [
       contentKey,
@@ -409,8 +449,8 @@ async function ensureDatabaseReady() {
   await initDbPool();
   await bootstrapSchema();
 
-  const [rows] = await dbPool.execute('SELECT COUNT(*) AS total FROM contents');
-  const total = Number(rows[0].total || 0);
+  const { rows } = await dbPool.query('SELECT COUNT(*) AS total FROM contents');
+  const total = Number(rows[0]?.total || 0);
 
   if (total === 0) {
     console.log('Database is empty. Seeding initial catalog from TMDB...');
@@ -420,14 +460,14 @@ async function ensureDatabaseReady() {
 }
 
 async function getCollection(collectionName, limit = 12, offset = 0) {
-  const [rows] = await dbPool.execute(
+  const { rows } = await dbPool.query(
     `
     SELECT c.*
     FROM content_collections cc
     INNER JOIN contents c ON c.content_key = cc.content_key
-    WHERE cc.collection_name = ?
+    WHERE cc.collection_name = $1
     ORDER BY cc.sort_rank ASC
-    LIMIT ? OFFSET ?
+    LIMIT $2 OFFSET $3
     `,
     [collectionName, limit, offset]
   );
@@ -436,17 +476,17 @@ async function getCollection(collectionName, limit = 12, offset = 0) {
 }
 
 async function getCollectionCount(collectionName) {
-  const [rows] = await dbPool.execute(
-    'SELECT COUNT(*) AS total FROM content_collections WHERE collection_name = ?',
+  const { rows } = await dbPool.query(
+    'SELECT COUNT(*) AS total FROM content_collections WHERE collection_name = $1',
     [collectionName]
   );
 
-  return Number(rows[0].total || 0);
+  return Number(rows[0]?.total || 0);
 }
 
 app.get('/api/health', async (_req, res) => {
   try {
-    await dbPool.execute('SELECT 1');
+    await dbPool.query('SELECT 1');
     return res.json({ status: 'ok' });
   } catch (error) {
     return res.status(500).json({ status: 'error', message: 'Database unreachable.' });
@@ -520,7 +560,7 @@ app.get('/api/content/:id', async (req, res) => {
       return res.status(400).json({ message: 'Invalid content id format.' });
     }
 
-    const [rows] = await dbPool.execute('SELECT * FROM contents WHERE content_key = ? LIMIT 1', [resolved.contentKey]);
+    const { rows } = await dbPool.query('SELECT * FROM contents WHERE content_key = $1 LIMIT 1', [resolved.contentKey]);
 
     if (!rows.length) {
       return res.status(404).json({ message: 'Content not found in database.' });
@@ -541,11 +581,11 @@ app.get('/api/content/:id/videos', async (req, res) => {
       return res.status(400).json({ message: 'Invalid content id format.' });
     }
 
-    const [rows] = await dbPool.execute(
+    const { rows } = await dbPool.query(
       `
       SELECT *
       FROM content_videos
-      WHERE content_key = ?
+      WHERE content_key = $1
       ORDER BY official DESC, published_at DESC, created_at DESC
       LIMIT 1
       `,
@@ -582,11 +622,11 @@ app.get('/api/search', async (req, res) => {
       return res.status(400).json({ message: 'Query parameter q is required.' });
     }
 
-    const [rows] = await dbPool.execute(
+    const { rows } = await dbPool.query(
       `
       SELECT *
       FROM contents
-      WHERE title LIKE ?
+      WHERE title ILIKE $1
       ORDER BY popularity DESC, rating DESC
       LIMIT 30
       `,
@@ -602,6 +642,13 @@ app.get('/api/search', async (req, res) => {
 
 app.post('/api/admin/sync', async (_req, res) => {
   try {
+    const authHeader = String(_req.headers.authorization || '');
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+    if (!adminSyncToken || token !== adminSyncToken) {
+      return res.status(401).json({ message: 'Unauthorized.' });
+    }
+
     await seedDatabaseFromTmdb();
     return res.json({ message: 'Database sync completed.' });
   } catch (error) {
