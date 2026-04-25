@@ -6,6 +6,12 @@ const apiClient = axios.create({
   baseURL: API_BASE_URL
 });
 
+const withAdminHeaders = (token) => ({
+  headers: {
+    Authorization: `Bearer ${token}`
+  }
+});
+
 export const fetchHomeContent = async () => {
   const response = await apiClient.get('/home');
   return response.data;
@@ -60,4 +66,27 @@ export const searchMovies = async (query) => {
     console.error('Error searching for movies:', error);
     throw error;
   }
+};
+
+export const adminListContent = async (token, type = '') => {
+  const response = await apiClient.get('/admin/content', {
+    ...withAdminHeaders(token),
+    params: type ? { type } : undefined
+  });
+  return response.data;
+};
+
+export const adminSaveContent = async (token, payload) => {
+  const response = await apiClient.post('/admin/content', payload, withAdminHeaders(token));
+  return response.data;
+};
+
+export const adminDeleteContent = async (token, contentId) => {
+  const response = await apiClient.delete(`/admin/content/${contentId}`, withAdminHeaders(token));
+  return response.data;
+};
+
+export const adminSyncDatabase = async (token) => {
+  const response = await apiClient.post('/admin/sync', {}, withAdminHeaders(token));
+  return response.data;
 };

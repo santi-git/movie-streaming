@@ -84,6 +84,7 @@ const IMAGE_BASE_BACKDROP = 'https://image.tmdb.org/t/p/w1280';
 const COLLECTION_TRENDING = 'trending';
 const COLLECTION_MOVIES = 'movies';
 const COLLECTION_SERIES = 'series';
+const ALLOWED_COLLECTIONS = new Set([COLLECTION_TRENDING, COLLECTION_MOVIES, COLLECTION_SERIES]);
 
 let dbPool;
 let genreCache = {
@@ -107,6 +108,52 @@ function resolveContentId(contentId) {
     tmdbId: Number(tmdbId),
     contentKey: `${type === 'movie' ? 'movie' : 'series'}-${Number(tmdbId)}`
   };
+}
+
+function requireAdminToken(req, res, next) {
+  const authHeader = String(req.headers.authorization || '');
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+  if (!adminSyncToken || token !== adminSyncToken) {
+    return res.status(401).json({ message: 'Unauthorized.' });
+  }
+
+  return next();
+}
+
+function normalizeType(value) {
+  const type = String(value || '').trim().toLowerCase();
+  return type === 'series' ? 'series' : (type === 'movie' ? 'movie' : '');
+}
+
+function normalizeCollections(type, collections) {
+  if (Array.isArray(collections) && collections.length) {
+    return collections.filter((item) => ALLOWED_COLLECTIONS.has(String(item || '').trim()));
+  }
+
+  return type === 'movie' ? [COLLECTION_MOVIES] : [COLLECTION_SERIES];
+}
+
+async function addContentToCollection(collectionName, contentKey) {
+  const { rows } = await dbPool.query(
+    'SELECT COALESCE(MAX(sort_rank), 0) + 1 AS next_rank FROM content_collections WHERE collection_name = $1',
+    [collectionName]
+  );
+
+  const nextRank = Number(rows[0]?.next_rank || 1);
+
+  await dbPool.query(
+    `
+    INSERT INTO content_collections (collection_name, content_key, sort_rank)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (collection_name, content_key) DO NOTHING
+    `,
+    [collectionName, contentKey, nextRank]
+  );
+}
+
+async function removeContentFromCollections(contentKey) {
+  await dbPool.query('DELETE FROM content_collections WHERE content_key = $1', [contentKey]);
 }
 
 function pickTrailerVideo(videos) {
@@ -640,15 +687,157 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
-app.post('/api/admin/sync', async (_req, res) => {
+app.get('/api/admin/content', requireAdminToken, async (req, res) => {
   try {
-    const authHeader = String(_req.headers.authorization || '');
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const type = normalizeType(req.query.type);
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 50)));
 
-    if (!adminSyncToken || token !== adminSyncToken) {
-      return res.status(401).json({ message: 'Unauthorized.' });
+    let rows;
+
+    if (type) {
+      const result = await dbPool.query(
+        `
+        SELECT c.*
+        FROM contents c
+        WHERE c.type = $1
+        ORDER BY c.updated_at DESC
+        LIMIT $2
+        `,
+        [type, limit]
+      );
+      rows = result.rows;
+    } else {
+      const result = await dbPool.query(
+        `
+        SELECT c.*
+        FROM contents c
+        ORDER BY c.updated_at DESC
+        LIMIT $1
+        `,
+        [limit]
+      );
+      rows = result.rows;
     }
 
+    return res.json(rows.map(mapRowToCard));
+  } catch (error) {
+    console.error('Error listing admin content:', error.message);
+    return res.status(500).json({ message: 'Failed to list content.' });
+  }
+});
+
+app.post('/api/admin/content', requireAdminToken, async (req, res) => {
+  try {
+    const type = normalizeType(req.body.type);
+    const tmdbId = Number(req.body.tmdbId);
+    const title = String(req.body.title || '').trim();
+
+    if (!type) {
+      return res.status(400).json({ message: 'type must be movie or series.' });
+    }
+
+    if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
+      return res.status(400).json({ message: 'tmdbId must be a positive number.' });
+    }
+
+    if (!title) {
+      return res.status(400).json({ message: 'title is required.' });
+    }
+
+    const contentKey = `${type}-${tmdbId}`;
+    const rating = Number(req.body.rating || 0);
+    const releaseDate = req.body.releaseDate ? String(req.body.releaseDate) : null;
+    const releaseYear = releaseDate ? releaseDate.slice(0, 4) : String(req.body.year || '').slice(0, 4) || null;
+    const collections = normalizeCollections(type, req.body.collections);
+    const trailerKey = String(req.body.trailerKey || '').trim();
+    const trailerName = String(req.body.trailerName || 'Official Trailer').trim();
+
+    await dbPool.query(
+      `
+      INSERT INTO contents (
+        content_key, tmdb_id, type, title, poster_url, backdrop_url,
+        overview, rating, release_date, release_year, genre, popularity, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+      ON CONFLICT (content_key) DO UPDATE SET
+        title = EXCLUDED.title,
+        poster_url = EXCLUDED.poster_url,
+        backdrop_url = EXCLUDED.backdrop_url,
+        overview = EXCLUDED.overview,
+        rating = EXCLUDED.rating,
+        release_date = EXCLUDED.release_date,
+        release_year = EXCLUDED.release_year,
+        genre = EXCLUDED.genre,
+        popularity = EXCLUDED.popularity,
+        updated_at = CURRENT_TIMESTAMP
+      `,
+      [
+        contentKey,
+        tmdbId,
+        type,
+        title,
+        String(req.body.poster || '').trim(),
+        String(req.body.backdrop || '').trim(),
+        String(req.body.overview || '').trim(),
+        Number.isFinite(rating) ? rating : 0,
+        releaseDate,
+        releaseYear,
+        String(req.body.genre || '').trim(),
+        Number(req.body.popularity || 0)
+      ]
+    );
+
+    await removeContentFromCollections(contentKey);
+
+    for (const collectionName of collections) {
+      await addContentToCollection(collectionName, contentKey);
+    }
+
+    if (trailerKey) {
+      await dbPool.query(
+        `
+        INSERT INTO content_videos (
+          content_key, video_key, name, site, video_type, official, published_at, embed_url
+        ) VALUES ($1, $2, $3, 'YouTube', 'Trailer', TRUE, NOW(), $4)
+        ON CONFLICT (content_key, video_key) DO UPDATE SET
+          name = EXCLUDED.name,
+          embed_url = EXCLUDED.embed_url
+        `,
+        [contentKey, trailerKey, trailerName, `https://www.youtube.com/embed/${trailerKey}?autoplay=1&rel=0`]
+      );
+    }
+
+    return res.json({ message: 'Content saved successfully.', id: contentKey });
+  } catch (error) {
+    console.error('Error saving admin content:', error.message);
+    return res.status(500).json({ message: 'Failed to save content.' });
+  }
+});
+
+app.delete('/api/admin/content/:id', requireAdminToken, async (req, res) => {
+  try {
+    const resolved = resolveContentId(req.params.id);
+
+    if (!resolved) {
+      return res.status(400).json({ message: 'Invalid content id format.' });
+    }
+
+    await dbPool.query('DELETE FROM content_videos WHERE content_key = $1', [resolved.contentKey]);
+    await dbPool.query('DELETE FROM content_collections WHERE content_key = $1', [resolved.contentKey]);
+    const result = await dbPool.query('DELETE FROM contents WHERE content_key = $1', [resolved.contentKey]);
+
+    if (!result.rowCount) {
+      return res.status(404).json({ message: 'Content not found.' });
+    }
+
+    return res.json({ message: 'Content deleted successfully.' });
+  } catch (error) {
+    console.error('Error deleting admin content:', error.message);
+    return res.status(500).json({ message: 'Failed to delete content.' });
+  }
+});
+
+app.post('/api/admin/sync', requireAdminToken, async (_req, res) => {
+  try {
     await seedDatabaseFromTmdb();
     return res.json({ message: 'Database sync completed.' });
   } catch (error) {

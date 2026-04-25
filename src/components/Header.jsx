@@ -27,6 +27,7 @@ const Header = () => {
         <li><Link to="/" className={isHome ? 'active' : ''}>Home</Link></li>
         <li><Link to="/movies" className={isMovies ? 'active' : ''}>Movies</Link></li>
         <li><Link to="/tv-shows" className={isTvShows ? 'active' : ''}>TV Shows</Link></li>
+        <li><Link to="/admin" className={location.pathname.startsWith('/admin') ? 'active' : ''}>Admin</Link></li>
       </ul>
 
       <div className="navbar-search">
